@@ -40,4 +40,11 @@ repoEntry.prototype.setElement = function(element){
   return this;
 }
 
+repoEntry.prototype.stale = function(node){
+  if ((node.repoEntry == this) && node.repoEntry.element){
+    delete node.repoEntry.element;
+  }
+  return this;
+};
+
 module.exports = repoEntry

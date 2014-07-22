@@ -1,6 +1,7 @@
-var leveldown = require("./node/leveldown.js")
+var leveldown = require("./node/leveldown.js"),
+    ndn;
 
-var debug = false
+var debug = true;
 
 function Database (contentStore, policy, onopen){
   this.contentStore = contentStore
@@ -12,6 +13,11 @@ function Database (contentStore, policy, onopen){
   return this;
 }
 
+Database.installNDN = function(NDN){
+  ndn = NDN;
+  return this;
+};
+
 Database.prototype.puts = []
 
 Database.prototype.getQueue = []
@@ -19,18 +25,22 @@ Database.prototype.getQueue = []
 Database.prototype.insertQueue = function(item){
   var self = this;
   var db = this.levelWrapper
+  if (item){
+    if (debug) console.log("adding item to put queue")
+    this.puts.push({
+      type: 'put'
+      , key: item.data.name.toUri()
+      , value: item.element
+      , data: item.data
+      , callback : item.callback
+    })
+  }
   if (db._open){
-    if (item){
-      if (debug) console.log("adding item to put queue")
-      this.puts.push({
-        type: 'put'
-        , key: item.repoEntry.uri
-        , value: item.element
-        , repoEntry: item.repoEntry
-        , callback : item.callback
-      })
-    } else{
-      setTimeout(self.insertQueue, 20)
+    if (!this.hasPendingInsert){
+      this.hasPendingInsert = true;
+      setTimeout(this.insertQueue, 25)
+    }else{
+      this.hasPendingInsert = false;
     }
   } else {
     if (self.puts.length > 0)
@@ -39,7 +49,7 @@ Database.prototype.insertQueue = function(item){
       if (debug) {
         console.log("putting following uris from queue: ")
         for (var i = 0 ; i  < self.puts.length; i++)
-          {console.log(self.puts[i].repoEntry.uri)}
+          {console.log(self.puts[i].key)}
       }
       db.down.open({
         blockSize : 10240
@@ -53,12 +63,12 @@ Database.prototype.insertQueue = function(item){
         self.puts = []
         db.down.batch(batch, function(err){
           if (err){
-            if (debug) console.log(err);
+            if (debug) console.log("batch err:",err);
             self.puts.concat(batch)
           }else{
             for(var i = 0; i < batch.length; i++ ){
-              self.contentStore.insert(batch[i].value, batch[i].repoEntry)
-              if (debug){ console.log("item " + batch[i].repoEntry.uri + " inserted")}
+              self.contentStore.insert(batch[i].value, batch[i].data)
+              if (debug){ console.log("item " + batch[i].key + " inserted")}
               batch[i].callback()
             }
             if(debug) console.log("batch queue put success ")
@@ -66,7 +76,7 @@ Database.prototype.insertQueue = function(item){
           }
           db.down.close(function(err){
               if(err)
-                if(debug) console.log(err);
+                if(debug) console.log("error in db.close", err);
               db._open = false
           })
         })
@@ -136,14 +146,14 @@ Database.prototype.getElement = function(repoEntry, callback, self){
   }
 }
 
-Database.prototype.insert = function( element, repoEntry, callback){
+Database.prototype.insert = function( element, data, callback){
   var db = this.levelWrapper;
   callback = callback || function(){};
   var self = this;
   if(db._open){
-    if (debug) console.log("db open, adding to queue", element, repoEntry)
+    if (debug) console.log("db open, adding to queue", element, data)
     self.insertQueue({
-      repoEntry: repoEntry
+      data: data
       , element: element
       , callback: callback
     })
@@ -153,16 +163,16 @@ Database.prototype.insert = function( element, repoEntry, callback){
     db.down.open({
       blockSize : 10240
     },function(err){
-      if (debug) console.log("Database.insert: database open", repoEntry.uri, element, err)
+      if (debug) console.log("Database.insert: database open", element, err)
       if (err){
         return callback(err);
       }
-      db.down.put(repoEntry.uri, element, function(err){
+      db.down.put(data.name.toUri(), element, function(err){
         if (debug) console.log("put success callback", err)
         if (err )
           return callback(err);
         else if (!err){
-          self.contentStore.insert(element, repoEntry)
+          self.contentStore.insert(element, data)
         }
 
         db.down.close(function(err){
@@ -178,19 +188,21 @@ Database.prototype.insert = function( element, repoEntry, callback){
   return this;
 }
 
-Database.prototype.populateNameTree = function(){
+Database.prototype.populateNameTree = function(cb){
   var self = this
     , db = self.levelWrapper;
-
+  if (debug) console.log("Database.populateNameTree")
   if(db._open){
+    if (debug) console.log("db already open, waiting")
     setTimeout(this.populateNameTree,25)
   }else{
     db._open = true
     db.down.open({
       blockSize: 10240
     }, function(err){
+
+      if (debug) console.log("db open in populateNameTree",err);
       if (err){
-        if (debug) console.log(err);
         return;
       }
       var iterator = db.down.iterator({
@@ -199,13 +211,17 @@ Database.prototype.populateNameTree = function(){
       });
 
       function builder(err, uri){
-        if (err){
-          if (debug) console.log(err);
-        } else if (uri) {
 
-          self.nameTree.addNode(uri).repoEntry = new self.contentStore.EntryClass(null, {name: new self.contentStore.ndn.Name(uri)} )
-          iterator.next(builder)
-        } else{
+        if (debug) console.log("builder iterator", uri, err, iterator.next);
+        if (err){
+          return builder(null, null)
+        } else if (uri) {
+          if (debug) console.log("builder iterator.next", self.nameTree, self.contentStore);
+          var node = self.nameTree.lookup(uri)
+          self.contentStore.insert(null, new ndn.Data(new ndn.Name(uri), new ndn.SignedInfo(), "entry"))
+          if (debug) console.log("builder iterator.next");
+          iterator.next(builder);
+        } else {
           db.down.close(function(err){
             if (debug) console.log("end of builder iterator")
             if(err && debug)
@@ -218,12 +234,13 @@ Database.prototype.populateNameTree = function(){
               }
             }
             if (debug) console.log(Object.keys(self.contentStore.nameTree))
+            self.insertQueue();
             if (self.getQueue.length > 0){
               var q = self.getQueue.shift()
               if (debug) console.log("nameTree populated, fetching from queue")
               db.getElement(q.repoEntry, q.callback)
             }
-            self.insertQueue();
+            if (cb) cb()
           });
         }
       }
