@@ -3,7 +3,6 @@ var leveldown = require('leveldown')
 
 function levelWrapper(policy, debug){
   this.down = new leveldown(policy.path || path);
-  this.debug = debug
   return this;
 }
 

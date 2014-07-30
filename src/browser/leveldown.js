@@ -1,4 +1,4 @@
-var leveldown = require('level-js')
+var leveldown = require('level-js');
 
 function levelWrapper(policy, debug){
   this.down = new leveldown("/");
