@@ -1,5 +1,4 @@
-var io = require("ndn-io")
-  , Policy = require("./policy.js");
+//var Policy = require("./policy.js");
 
 var CODE = {
   CONTENTRECEIVED: 0
@@ -7,46 +6,67 @@ var CODE = {
   , DATANOTFOUND: 2
 };
 
-function InterestHandler (face, database, policy){
-  this.policy = new Policy(policy);
-  this.face = face;
+/**InterestHandler has methods to interperet and respond to interest messages
+ *@constructor
+ *@param {Object} face the ndn.Face object for connection to local or remote forwarder
+ *@param {Database} database a {@link Database} instance
+ *@param {Object} policy a policy object
+ *@returns {InterestHandler} a new InterestHandler instance
+ */
+function InterestHandler (io, database, policy){
+  //this.policy = new Policy(policy);
   this.database = database;
   this.ndn = database.ndn;
-  this.io = new io(face, database.nameTree);
-  io.installFace(face, this.onInterest);
+  this.io = io;
   return this;
 }
 
+/** negative acknowledgement (not implimented)
+ */
 InterestHandler.prototype.nack = function(interest, code){
   //send nack packet
-  var nack = "dummy";
-  self.face.transport.send(nack);
+  //var nack = "dummy";
+  //self.face.transport.send(nack);
 };
 
+/** acknowledgement (not implimented)
+ */
 InterestHandler.prototype.ack = function(interest, code){
   //send storage ack
   var ack = "dummy";
   this.face.transport.send(ack);
 };
 
+/** determine if the interest is a storage request
+ *@param {Interest} interest the ndn.Interest object
+ *@returns {Boolean}
+ */
 InterestHandler.prototype.isStorageRequest = function(interest){
   //return true or false
   return false;
 };
 
+/** parse a storage request
+ *@param {Interest} interest the NDN.Interest object of the STORAGE REQUEST
+ *@returns {Interest} an interest for the first segment of the data to store
+ */
 InterestHandler.prototype.parseStorageRequest = function(interest){
   //return {uri, finalBlockId}
   return false;
 };
 
+/**Interest handler main functino
+ *@param {Interest} interest the ndn.Interest Object
+ *@returns {this} for chaining
+ */
 InterestHandler.prototype.onInterest = function(interest){
   var self = this;
   if (this.isStorageRequest(interest)){
-    var request = this.parseStorageRequest(interest);
-    if (this.policy.acceptStorageRequest(request)){
-      return io.fetchAllSegments(request.uri, function(data, element){
-        self.database.insert(element, new self.database.contentStore.EntryClass(element, data), function(){
-          if (self.ndn.DataUtils.arraysEqual(data.getMetaInfo().getFinalBlockID, request.finalBlockID)){
+    var requestInterest = this.parseStorageRequest(interest);
+    if (this.policy.acceptStorageRequest(requestInterest)){
+      return io.fetchAllSegments(requestInterest, function(element, data, finalBlockID){
+        self.database.insert(element, data, function(){
+          if (self.ndn.DataUtils.arraysEqual(data.getMetaInfo().getFinalBlockID, requestInterest.finalBlockID)){
             self.ack(interest, CODE.CONTENTRECEIVED);
           }
         });
